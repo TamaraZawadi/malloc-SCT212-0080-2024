@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <unistd.h>
+#include "myalloc.h"
 
 #define CHUNK_SIZE (64 * 1024)
 #define MAGIC 0x4D59414C
@@ -95,4 +96,49 @@ static block_t *grow(size_t need)
     heap_bytes += total;
 
     return new_block;
+}
+/* Find the first free block large enough for the request */
+static block_t *find_fit(size_t need)
+{
+    block_t *current = head;
+
+    while (current != NULL) {
+        if (current->free && current->size >= need)
+            return current;
+
+        current = current->next;
+    }
+
+    return NULL;
+}
+
+/* Allocate memory using the first-fit policy */
+void *my_malloc(size_t size)
+{
+    if (size == 0)
+        return NULL;
+
+    if (size > SIZE_MAX - 15)
+        return NULL;
+
+    size = align_up(size);
+
+    /* Search for the first free block large enough */
+    block_t *block = find_fit(size);
+
+    if (block != NULL) {
+       block->free = 0;
+       return payload(block);
+}
+
+    /* No suitable block found: request more heap memory */
+    block_t *new_block = grow(size);
+
+    if (new_block == NULL)
+       return NULL;
+
+    /* Mark the new block as allocated */
+    new_block->free = 0;
+
+    return payload(new_block);
 }
