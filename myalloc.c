@@ -34,11 +34,7 @@ static void *payload(block_t *block)
 {
     return (char *)block + HDR;
 }
-/* Recover the block header from a payload pointer */
-static block_t *header(void *ptr)
-{
-    return (block_t *)((char *)ptr - HDR);
-}
+
 /* Request more memory from the operating system */
 static block_t *grow(size_t need)
 {
@@ -169,4 +165,57 @@ void *my_malloc(size_t size)
     block->free = 0;
 
     return payload(block);
+}
+/* Free an allocated memory block */
+void my_free(void *ptr)
+{
+    /* Ignore NULL pointers */
+    if (ptr == NULL)
+        return;
+
+    /* Find the block that owns this payload pointer */
+    block_t *block = head;
+
+    while (block != NULL && payload(block) != ptr)
+        block = block->next;
+
+    /* Reject pointers that do not belong to the allocator */
+    if (block == NULL || block->magic != MAGIC) {
+        const char message[] = "my_free: invalid pointer\n";
+        write(STDERR_FILENO, message, sizeof(message) - 1);
+        return;
+    }
+
+    /* Check whether the block has already been freed */
+    if (block->free) {
+        const char message[] = "my_free: double free detected\n";
+        write(STDERR_FILENO, message, sizeof(message) - 1);
+        return;
+    }
+
+    /* Mark the block as free */
+    block->free = 1;
+
+    /* Coalesce physically adjacent free blocks */
+    block_t *current = head;
+
+    while (current != NULL && current->next != NULL) {
+        block_t *next = current->next;
+
+        /* Check whether both blocks are free and physically adjacent */
+        if (current->free && next->free &&
+            (char *)current + HDR + current->size == (char *)next) {
+
+            /* Merge the next block into the current block */
+            current->size += HDR + next->size;
+            current->next = next->next;
+            next->magic = 0;
+
+            /* Update tail if the last block was merged */
+            if (tail == next)
+                tail = current;
+        } else {
+            current = current->next;
+        }
+    }
 }
