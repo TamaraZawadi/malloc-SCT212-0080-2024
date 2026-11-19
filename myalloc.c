@@ -2,6 +2,7 @@
 #define _DEFAULT_SOURCE
 #endif
 
+#include <stdio.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -24,6 +25,9 @@ typedef struct block {
 static block_t *head = NULL;
 static block_t *tail = NULL;
 static size_t heap_bytes = 0;
+
+/* Current allocation placement policy */
+static fit_policy_t current_policy = FIT_FIRST;
 
 /* Round a size up to the nearest multiple of 16 */
 static size_t align_up(size_t n)
@@ -95,20 +99,31 @@ static block_t *grow(size_t need)
 
     return new_block;
 }
-/* Find the first free block large enough for the request */
+
+/* Find a suitable free block using the selected policy */
 static block_t *find_fit(size_t need)
 {
     block_t *current = head;
+    block_t *best = NULL;
 
     while (current != NULL) {
-        if (current->free && current->size >= need)
-            return current;
+        if (current->free && current->size >= need) {
+
+            /* First-fit: return the first suitable block */
+            if (current_policy == FIT_FIRST)
+                return current;
+
+            /* Best-fit: remember the smallest suitable block */
+            if (best == NULL || current->size < best->size)
+                best = current;
+        }
 
         current = current->next;
     }
 
-    return NULL;
+    return best;
 }
+
 /* Split a free block when the remaining space is sufficient */
 static void split_block(block_t *block, size_t need)
 {
@@ -319,4 +334,121 @@ void *my_realloc(void *ptr, size_t size)
     my_free(ptr);
 
     return new_ptr;
+}
+/* Set the memory allocation placement policy */
+void set_policy(fit_policy_t p)
+{
+    if (p == FIT_FIRST || p == FIT_BEST)
+        current_policy = p;
+}
+/* Collect statistics about the allocator's current state */
+void heap_stats(heap_stats_t *out)
+{
+    if (out == NULL)
+        return;
+
+    out->heap_bytes = heap_bytes;
+    out->used_bytes = 0;
+    out->free_bytes = 0;
+    out->blocks = 0;
+    out->free_blocks = 0;
+    out->largest_free = 0;
+
+    block_t *current = head;
+
+    while (current != NULL) {
+        out->blocks++;
+
+        if (current->free) {
+            out->free_bytes += current->size;
+            out->free_blocks++;
+
+            if (current->size > out->largest_free)
+                out->largest_free = current->size;
+        } else {
+            out->used_bytes += current->size;
+        }
+
+        current = current->next;
+    }
+}
+/* Display information about every block in the heap */
+void heap_dump(void)
+{
+    block_t *current = head;
+    size_t index = 0;
+    char buffer[128];
+
+    while (current != NULL) {
+        int length = snprintf(buffer, sizeof(buffer),
+                              "[ %2zu] %p size=%zu %s\n",
+                              index,
+                              (void *)payload(current),
+                              current->size,
+                              current->free ? "FREE" : "USED");
+
+        if (length > 0) {
+            size_t remaining = (size_t)length;
+
+            if (remaining >= sizeof(buffer))
+                remaining = sizeof(buffer) - 1;
+
+            size_t written = 0;
+
+            while (written < remaining) {
+                ssize_t result = write(STDOUT_FILENO,
+                                       buffer + written,
+                                       remaining - written);
+
+                if (result <= 0)
+                    break;
+
+                written += (size_t)result;
+            }
+        }
+
+        current = current->next;
+        index++;
+    }
+}
+/* Check the consistency of the heap */
+int heap_check(void)
+{
+    block_t *current = head;
+
+    while (current != NULL) {
+
+        /* Rule 1: Every block must have a valid magic value */
+        if (current->magic != MAGIC)
+            return 0;
+
+        /* Rule 2: Every payload must be 16-byte aligned */
+        if ((uintptr_t)payload(current) % 16 != 0)
+            return 0;
+
+        block_t *next = current->next;
+
+        if (next != NULL) {
+
+            /* Rule 3: Blocks must be in increasing address order */
+            if ((uintptr_t)current >= (uintptr_t)next)
+                return 0;
+
+            /* Rule 4: Adjacent free blocks must be coalesced */
+            uintptr_t current_end = (uintptr_t)payload(current);
+
+            if (current->size > UINTPTR_MAX - current_end)
+                return 0;
+
+            current_end += current->size;
+
+            if (current->free && next->free &&
+                current_end == (uintptr_t)next)
+                return 0;
+        }
+
+        current = next;
+    }
+
+    return 1;
 }
