@@ -111,6 +111,30 @@ static block_t *find_fit(size_t need)
 
     return NULL;
 }
+/* Split a free block when the remaining space is sufficient */
+static void split_block(block_t *block, size_t need)
+{
+    /* Check whether the remainder can hold a header and 16-byte payload */
+    if (block->size < need || block->size - need < HDR + 16)
+        return;
+
+    /* Calculate the address of the new block header */
+    block_t *new_block = (block_t *)((char *)block + HDR + need);
+
+    /* Initialize the new free block */
+    new_block->size = block->size - need - HDR;
+    new_block->next = block->next;
+    new_block->free = 1;
+    new_block->magic = MAGIC;
+
+    /* Update the original block */
+    block->size = need;
+    block->next = new_block;
+
+    /* Update tail if the original block was the last block */
+    if (tail == block)
+        tail = new_block;
+}
 
 /* Allocate memory using the first-fit policy */
 void *my_malloc(size_t size)
@@ -123,22 +147,26 @@ void *my_malloc(size_t size)
 
     size = align_up(size);
 
-    /* Search for the first free block large enough */
+    /* Search for a suitable free block */
     block_t *block = find_fit(size);
 
-    if (block != NULL) {
-       block->free = 0;
-       return payload(block);
-}
+    /* Grow the heap if no suitable block exists */
+    if (block == NULL) {
+        if (grow(size) == NULL)
+            return NULL;
 
-    /* No suitable block found: request more heap memory */
-    block_t *new_block = grow(size);
+        /* Retry the search after growing */
+        block = find_fit(size);
+    }
 
-    if (new_block == NULL)
-       return NULL;
+    if (block == NULL)
+        return NULL;
 
-    /* Mark the new block as allocated */
-    new_block->free = 0;
+    /* Split the block if enough space remains */
+    split_block(block, size);
 
-    return payload(new_block);
+    /* Mark the selected block as allocated */
+    block->free = 0;
+
+    return payload(block);
 }
