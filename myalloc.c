@@ -4,8 +4,11 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <unistd.h>
+
 #include "myalloc.h"
+
 
 #define CHUNK_SIZE (64 * 1024)
 #define MAGIC 0x4D59414C
@@ -16,8 +19,7 @@ typedef struct block {
     struct block *next;
     int free;
     int magic;
-}
- block_t;
+} block_t;
 /* Global allocator state */
 static block_t *head = NULL;
 static block_t *tail = NULL;
@@ -218,4 +220,103 @@ void my_free(void *ptr)
             current = current->next;
         }
     }
+}
+/* Allocate memory for an array and initialize it to zero */
+void *my_calloc(size_t nmemb, size_t size)
+{
+    /* Check for multiplication overflow */
+    if (nmemb != 0 && size > SIZE_MAX / nmemb)
+        return NULL;
+
+    /* Calculate the total allocation size */
+    size_t total = nmemb * size;
+
+    /* Allocate memory */
+    void *ptr = my_malloc(total);
+
+    if (ptr == NULL)
+        return NULL;
+
+    /* Initialize allocated memory to zero */
+    memset(ptr, 0, total);
+
+    return ptr;
+}
+
+/* Resize an allocated memory block */
+void *my_realloc(void *ptr, size_t size)
+{
+    /* If ptr is NULL, behave like my_malloc */
+    if (ptr == NULL)
+        return my_malloc(size);
+
+    /* If size is zero, free the block */
+    if (size == 0) {
+        my_free(ptr);
+        return NULL;
+    }
+
+    /* Check for size alignment overflow */
+    if (size > SIZE_MAX - 15)
+        return NULL;
+
+    /* Align the requested size */
+    size = align_up(size);
+
+    /* Find the block that owns this pointer */
+    block_t *block = head;
+
+    while (block != NULL && payload(block) != ptr)
+        block = block->next;
+
+    /* Reject invalid or freed pointers */
+    if (block == NULL || block->magic != MAGIC || block->free)
+        return NULL;
+
+    /* If the current block is large enough, reuse it */
+    if (block->size >= size) {
+        split_block(block, size);
+        return ptr;
+    }
+
+    /* Try to absorb adjacent free blocks */
+    while (block->next != NULL && block->next->free &&
+           (char *)block + HDR + block->size == (char *)block->next) {
+
+        block_t *next = block->next;
+
+        /* Merge the adjacent free block */
+        block->size += HDR + next->size;
+        block->next = next->next;
+        next->magic = 0;
+
+        /* Update tail if the last block was absorbed */
+        if (tail == next)
+            tail = block;
+
+        /* Stop when the combined block is large enough */
+        if (block->size >= size)
+            break;
+    }
+
+    /* Reuse the expanded block if it is now large enough */
+    if (block->size >= size) {
+        split_block(block, size);
+        return ptr;
+    }
+
+    /* Otherwise, allocate a new block */
+    void *new_ptr = my_malloc(size);
+
+    if (new_ptr == NULL)
+        return NULL;
+
+    /* Copy the existing contents */
+    size_t copy_size = block->size < size ? block->size : size;
+    memcpy(new_ptr, ptr, copy_size);
+
+    /* Free the old block */
+    my_free(ptr);
+
+    return new_ptr;
 }
