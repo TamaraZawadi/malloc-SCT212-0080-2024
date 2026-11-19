@@ -1,0 +1,12 @@
+# Compiled test and benchmark executables
+test_myalloc
+bench
+t_asan
+task2_test
+
+# Object files
+*.o
+
+# Core dump files
+core
+core.*
